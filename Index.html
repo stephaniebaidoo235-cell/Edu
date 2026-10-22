@@ -2,11 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>EduGuide</title>
 <style>
 :root{--bg:#f6f3ea;--ink:#14213d;--card:#fff;--line:#e3dfd3;--acc:#fca311;--mut:#666;--mark:#ffe3a3}
-@media (prefers-color-scheme:dark){:root{--bg:#14213d;--ink:#f6f3ea;--card:#1d2c4f;--line:#33466e;--mut:#b9c0d0;--mark:#7a5a0e}}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14213d;--ink:#f6f3ea;--card:#1d2c4f;--line:#33466e;--mut:#b9c0d0;--mark:#7a5a0e}}
+:root[data-theme="dark"]{--bg:#14213d;--ink:#f6f3ea;--card:#1d2c4f;--line:#33466e;--mut:#b9c0d0;--mark:#7a5a0e}
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
 *{box-sizing:border-box}
 body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
 main{max-width:720px;margin:0 auto;padding:20px}
@@ -32,7 +35,8 @@ summary{cursor:pointer;font-weight:bold}
 <div class="card">
 <h2>1. Add your notes</h2>
 <textarea id="notes" placeholder="Paste your notes here..."></textarea>
-<input type="file" id="file" accept=".txt,.md" style="margin-top:8px">
+<input type="file" id="file" accept=".txt,.md,.docx,.pdf" multiple style="margin-top:8px">
+<p class="mut">Supports Word (.docx), PDF (text-based), TXT, or paste your notes.</p>
 <div>
 <button id="process">Process notes</button>
 <button id="sample" class="alt">Use sample notes</button>
@@ -54,6 +58,8 @@ summary{cursor:pointer;font-weight:bold}
 </div>
 </main>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 const STOP = new Set("a an the and or of to in on for is are was were be been it this that with as by at from which what who how why when do does did can not no into than then so such these those their there they them its his her you your we our about also may will would should could has have had if but".split(" "));
 const $ = id => document.getElementById(id);
@@ -171,11 +177,40 @@ $("sample").onclick = () => { $("notes").value = SAMPLE; processNotes(); };
 $("ask").onclick = ask;
 $("q").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
 $("quizBtn").onclick = quiz;
-$("file").onchange = e => {
-  const f = e.target.files[0]; if (!f) return;
-  const r = new FileReader();
-  r.onload = () => { $("notes").value = r.result; processNotes(); };
-  r.readAsText(f);
+async function readFile(f) {
+  const n = f.name.toLowerCase();
+  if (n.endsWith(".docx")) {
+    if (!window.mammoth) throw new Error("docx reader not loaded");
+    const r = await mammoth.extractRawText({ arrayBuffer: await f.arrayBuffer() });
+    return r.value;
+  }
+  if (n.endsWith(".pdf")) {
+    if (!window.pdfjsLib) throw new Error("pdf reader not loaded");
+    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    const pdf = await pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise;
+    let t = "";
+    for (let i = 1; i <= Math.min(pdf.numPages, 150); i++) {
+      const c = await (await pdf.getPage(i)).getTextContent();
+      t += c.items.map(x => x.str).join(" ") + "\n\n";
+    }
+    return t;
+  }
+  return await f.text();
+}
+
+$("file").onchange = async e => {
+  const files = [...e.target.files]; if (!files.length) return;
+  $("status").textContent = "Reading file...";
+  try {
+    const parts = [];
+    for (const f of files) parts.push(await readFile(f));
+    const all = parts.join("\n\n");
+    if (all.trim().length < 50) { $("status").textContent = "No readable text found. Scanned PDFs are not supported; paste the text instead."; return; }
+    $("notes").value = all;
+    processNotes();
+  } catch (err) {
+    $("status").textContent = "Could not read that file. Try pasting the text instead.";
+  }
 };
 </script>
 </body>
