@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EduGuide</title>
+<style>
+:root{--bg:#f6f3ea;--ink:#14213d;--card:#fff;--line:#e3dfd3;--acc:#fca311;--mut:#666;--mark:#ffe3a3}
+@media (prefers-color-scheme:dark){:root{--bg:#14213d;--ink:#f6f3ea;--card:#1d2c4f;--line:#33466e;--mut:#b9c0d0;--mark:#7a5a0e}}
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:var(--bg);color:var(--ink);line-height:1.5}
+main{max-width:720px;margin:0 auto;padding:20px}
+h1{font-family:Georgia,serif;font-weight:400;font-size:40px;margin:8px 0 0}
+h2{font-size:18px;margin:0 0 8px}
+.sub{margin:0 0 16px;color:var(--mut)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:14px 0}
+textarea,input[type=text]{width:100%;padding:12px;border:1px solid var(--line);border-radius:10px;font:inherit;background:var(--bg);color:var(--ink)}
+textarea{min-height:140px}
+button{background:var(--ink);color:var(--bg);border:0;border-radius:10px;padding:12px 16px;font:inherit;cursor:pointer;margin:8px 8px 0 0}
+button.alt{background:var(--acc);color:#14213d}
+mark{background:var(--mark);color:inherit}
+details{border-top:1px solid var(--line);padding:8px 0}
+summary{cursor:pointer;font-weight:bold}
+.mut{font-size:13px;color:var(--mut)}
+</style>
+</head>
+<body>
+<main>
+<h1>🎓 EduGuide</h1>
+<p class="sub">Ask questions from your lecturer-approved notes.</p>
+
+<div class="card">
+<h2>1. Add your notes</h2>
+<textarea id="notes" placeholder="Paste your notes here..."></textarea>
+<input type="file" id="file" accept=".txt,.md" style="margin-top:8px">
+<div>
+<button id="process">Process notes</button>
+<button id="sample" class="alt">Use sample notes</button>
+</div>
+<p class="mut" id="status"></p>
+</div>
+
+<div class="card">
+<h2>2. Ask a question</h2>
+<input type="text" id="q" placeholder="e.g. What does the transport layer do?">
+<button id="ask">Ask</button>
+<div id="answer"></div>
+</div>
+
+<div class="card">
+<h2>3. Practice</h2>
+<button id="quizBtn" class="alt">Generate practice questions</button>
+<div id="quiz"></div>
+</div>
+</main>
+
+<script>
+const STOP = new Set("a an the and or of to in on for is are was were be been it this that with as by at from which what who how why when do does did can not no into than then so such these those their there they them its his her you your we our about also may will would should could has have had if but".split(" "));
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const tok = s => (s.toLowerCase().match(/[a-z0-9]+/g) || []).filter(w => w.length > 2 && !STOP.has(w));
+const sentences = t => (t.replace(/\s+/g, " ").match(/[^.!?]+[.!?]+|[^.!?]+$/g) || []).map(s => s.trim()).filter(Boolean);
+
+let chunks = [], df = {}, lastHits = [];
+
+function build(text) {
+  chunks = []; df = {};
+  let cur = [], n = 0;
+  for (const s of sentences(text)) {
+    cur.push(s); n += s.split(" ").length;
+    if (n >= 45) { chunks.push({ text: cur.join(" ") }); cur = []; n = 0; }
+  }
+  if (cur.length) {
+    if (n >= 8 || !chunks.length) chunks.push({ text: cur.join(" ") });
+    else chunks[chunks.length - 1].text += " " + cur.join(" ");
+  }
+  chunks.forEach((c, i) => {
+    c.id = i + 1; c.tf = {};
+    tok(c.text).forEach(w => c.tf[w] = (c.tf[w] || 0) + 1);
+    c.len = Math.sqrt(Object.values(c.tf).reduce((a, b) => a + b, 0)) || 1;
+    Object.keys(c.tf).forEach(w => df[w] = (df[w] || 0) + 1);
+  });
+}
+
+function search(q, k = 3) {
+  const qt = [...new Set(tok(q))], N = chunks.length;
+  const sc = chunks.map(c => {
+    let s = 0;
+    qt.forEach(w => { if (c.tf[w]) s += (1 + Math.log(c.tf[w])) * Math.log(1 + N / df[w]); });
+    return { c, s: s / c.len };
+  });
+  const best = Math.max(...sc.map(x => x.s), 0.0001);
+  return sc.filter(x => x.s > 0).sort((a, b) => b.s - a.s).slice(0, k)
+    .map(x => ({ c: x.c, pct: Math.round(100 * x.s / best) }));
+}
+
+function hl(text, qt) {
+  let t = esc(text);
+  qt.forEach(w => { t = t.replace(new RegExp("\\b(" + w + "\\w*)", "gi"), "<mark>$1</mark>"); });
+  return t;
+}
+
+function bestSentences(qt, n = 2) {
+  const N = chunks.length, all = [];
+  chunks.forEach(c => sentences(c.text).forEach((s, i) => {
+    const st = new Set(tok(s)); let sc = 0;
+    qt.forEach(w => { if (st.has(w)) sc += Math.log(1 + N / (df[w] || 1)); });
+    if (sc > 0) all.push({ s, sc, c, i });
+  }));
+  all.sort((a, b) => b.sc - a.sc);
+  return all.filter((x, k) => k < n && x.sc >= 0.6 * all[0].sc);
+}
+
+function ask() {
+  const q = $("q").value.trim();
+  if (!chunks.length) { $("answer").innerHTML = "<p>Add and process your notes first.</p>"; return; }
+  if (!q) return;
+  const qt = [...new Set(tok(q))];
+  const best = bestSentences(qt);
+  if (!best.length) { $("answer").innerHTML = "<p>Nothing relevant found in your notes. Try different words.</p>"; return; }
+  const top = best[0].c;
+  const hits = [{ c: top, pct: 100 }, ...search(q, 4).filter(x => x.c !== top)].slice(0, 3);
+  lastHits = hits.map(h => h.c);
+  const ans = best.slice().sort((a, b) => a.c.id - b.c.id || a.i - b.i).map(x => x.s).join(" ");
+  let h = "<h2>Answer from your notes</h2><p>" + hl(ans, qt) +
+    "</p><p class='mut'>Source: Section " + top.id + "</p><h2>📖 Revise these sections</h2>";
+  hits.forEach(x => {
+    h += "<details><summary>Section " + x.c.id + " (match " + x.pct + "%)</summary><p>" + hl(x.c.text, qt) + "</p></details>";
+  });
+  $("answer").innerHTML = h;
+}
+
+function makeQuiz(pool, n = 5) {
+  const out = [];
+  for (const c of pool) {
+    for (const s of (c.text.match(/[^.!?]+[.!?]+/g) || [])) {
+      const w = s.trim().split(" ");
+      if (w.length < 8 || w.length > 30) continue;
+      const keys = w.map(x => x.replace(/[^A-Za-z0-9-]/g, "")).filter(x => x.length >= 6);
+      if (!keys.length) continue;
+      const k = keys.sort((a, b) => b.length - a.length)[0];
+      out.push({ q: s.trim().replace(k, "_____"), a: k, src: "Section " + c.id });
+      if (out.length >= n) return out;
+      break;
+    }
+  }
+  return out;
+}
+
+function quiz() {
+  if (!chunks.length) { $("quiz").innerHTML = "<p>Add and process your notes first.</p>"; return; }
+  const items = makeQuiz(lastHits.length ? lastHits : chunks);
+  $("quiz").innerHTML = items.length ? items.map((it, i) =>
+    "<p><b>Q" + (i + 1) + ". Fill in the blank:</b> " + esc(it.q) + "</p><details><summary>Show answer</summary>" +
+    esc(it.a) + " <span class='mut'>(" + it.src + ")</span></details>").join("") : "<p>Not enough text to make questions.</p>";
+}
+
+function processNotes() {
+  const t = $("notes").value.trim();
+  if (t.split(/\s+/).length < 15) { $("status").textContent = "Please add a few full sentences of notes."; return; }
+  build(t); lastHits = []; $("answer").innerHTML = ""; $("quiz").innerHTML = "";
+  $("status").textContent = "Ready: " + chunks.length + " sections indexed.";
+}
+
+const SAMPLE = `A computer network connects devices so they can share data and resources. The OSI model describes networking in seven layers: physical, data link, network, transport, session, presentation and application. The physical layer moves raw bits across cables or radio signals. The data link layer groups bits into frames and uses MAC addresses to deliver them within a local network. The network layer uses IP addresses and routers to forward packets between different networks. The transport layer provides end-to-end communication. TCP offers reliable delivery with acknowledgements and retransmission, while UDP is faster but does not guarantee delivery. The application layer provides services such as web browsing through HTTP and email through SMTP.
+
+A router connects separate networks and chooses the best path for each packet. A switch connects devices inside one local network and forwards frames using MAC addresses. Bandwidth is the maximum amount of data a link can carry per second, while latency is the delay a packet experiences when travelling from sender to receiver. Congestion happens when too much traffic competes for the same link, which increases delay and can cause packet loss.`;
+
+$("process").onclick = processNotes;
+$("sample").onclick = () => { $("notes").value = SAMPLE; processNotes(); };
+$("ask").onclick = ask;
+$("q").addEventListener("keydown", e => { if (e.key === "Enter") ask(); });
+$("quizBtn").onclick = quiz;
+$("file").onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => { $("notes").value = r.result; processNotes(); };
+  r.readAsText(f);
+};
+</script>
+</body>
+</html>
